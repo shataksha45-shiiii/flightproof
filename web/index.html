@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>FlightProof</title>
+<meta name="description" content="Check whether a drone flight log was changed. Drop a file and compare its fingerprint with the record on Base Sepolia.">
+<meta property="og:title" content="FlightProof">
+<meta property="og:description" content="A tamper-evident notary for drone flight logs, checked against a public blockchain.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'%3E%3Crect width='26' height='26' rx='6' fill='%230b0f22'/%3E%3Cpath d='M3 20C8 4 15 4 23 14' stroke='%238fa8ff' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='23' cy='14' r='2.6' fill='%237ce3c4'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --night: #0b0f22;
+  --dusk: #18204d;
+  --horizon: #8fa8ff;
+  --text: #e9ecfa;
+  --muted: #8c94bd;
+  --line: rgba(190, 200, 255, 0.14);
+  --ok: #7ce3c4;
+  --bad: #ff7a8a;
+  --tone: var(--horizon);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --sans: "Bricolage Grotesque", system-ui, -apple-system, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; }
+html { color-scheme: dark; background: var(--night); }
+
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 16px 48px;
+  color: var(--text);
+  font-family: var(--sans);
+  background:
+    radial-gradient(120% 55% at 50% 108%, rgba(143, 168, 255, 0.30), transparent 62%),
+    linear-gradient(180deg, var(--night) 0%, #10163a 55%, var(--dusk) 100%);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { width: 100%; max-width: 880px; }
+
+/* header */
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 28px 0 0;
+}
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 18px; letter-spacing: -0.01em; }
+.brand svg { width: 26px; height: 26px; }
+.net { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--muted); }
+.net .live { width: 7px; height: 7px; border-radius: 50%; background: #5b628a; transition: background 0.6s var(--ease); }
+.net[data-up="true"] .live { background: var(--ok); animation: breathe 2.8s ease-in-out infinite; }
+.net .block { font-family: var(--mono); font-size: 12px; opacity: 0.75; }
+@keyframes breathe { 0%, 100% { box-shadow: 0 0 0 0 rgba(124, 227, 196, 0.5); } 50% { box-shadow: 0 0 0 6px rgba(124, 227, 196, 0); } }
+
+/* intro */
+.intro { padding: 72px 0 0; }
+h1 {
+  font-weight: 300;
+  font-size: clamp(42px, 8vw, 80px);
+  line-height: 0.98;
+  letter-spacing: -0.04em;
+  max-width: 13ch;
+  font-variation-settings: "opsz" 96;
+}
+.lede { margin-top: 22px; max-width: 46ch; font-size: clamp(16px, 2.2vw, 18px); line-height: 1.55; color: var(--muted); }
+
+/* stage */
+.stage {
+  position: relative;
+  display: block;
+  margin-top: 44px;
+  min-height: 280px;
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  overflow: hidden;
+  cursor: pointer;
+  background:
+    radial-gradient(480px circle at var(--mx, 50%) var(--my, 40%), rgba(143, 168, 255, 0.10), transparent 60%),
+    rgba(255, 255, 255, 0.025);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: border-color 0.5s var(--ease), transform 0.6s var(--ease), box-shadow 0.6s var(--ease);
+}
+.stage:hover { border-color: rgba(190, 200, 255, 0.26); }
+.stage[data-over="true"] { border-color: var(--horizon); transform: scale(1.008); box-shadow: 0 0 0 6px rgba(143, 168, 255, 0.08), 0 30px 80px -30px rgba(143, 168, 255, 0.45); }
+.stage:has(input:focus-visible) { outline: 2px solid var(--horizon); outline-offset: 4px; }
+.stage[data-state="checking"] { cursor: progress; }
+.stage input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+.art { position: absolute; inset: 0; width: 100%; height: 100%; }
+.guide { fill: none; stroke: var(--horizon); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 1 11; opacity: 0.45; transition: opacity 0.8s var(--ease); }
+.stage[data-over="true"] .guide { opacity: 0.9; }
+.stage:not([data-state="idle"]) .guide { opacity: 0; }
+
+.pen { transition: opacity 0.6s var(--ease); }
+.pen .halo { fill: var(--tone); opacity: 0.18; }
+.pen .core { fill: var(--tone); }
+.trace { fill: none; stroke: var(--tone); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 8px var(--tone)); }
+.stage[data-verdict="bad"] .trace { stroke-dasharray: 14 11; }
+
+.endmark { transform-box: fill-box; transform-origin: center; transform: scale(0.3); opacity: 0; transition: transform 0.7s var(--ease), opacity 0.5s var(--ease); }
+.endmark.in { transform: scale(1); opacity: 1; }
+.endmark .ring { fill: rgba(11, 15, 34, 0.85); stroke: var(--tone); stroke-width: 2; }
+.endmark .glyph { fill: none; stroke: var(--tone); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.pulse { fill: none; stroke: var(--tone); stroke-width: 2; opacity: 0; transform-box: fill-box; transform-origin: center; }
+.endmark.in + .pulse { animation: pulse 1.6s var(--ease) 0.3s 1; }
+@keyframes pulse { 0% { opacity: 0.7; transform: scale(1); } 100% { opacity: 0; transform: scale(2.6); } }
+
+.copy {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  padding: 24px; text-align: center;
+  pointer-events: none;
+  transition: opacity 0.6s var(--ease), transform 0.8s var(--ease);
+}
+.copy .title { font-weight: 500; font-size: clamp(24px, 4vw, 36px); letter-spacing: -0.025em; }
+.copy .hint { font-size: 15px; color: var(--muted); }
+.copy .hint u { text-decoration-color: rgba(190, 200, 255, 0.35); text-underline-offset: 4px; }
+.stage:not([data-state="idle"]) .copy.idle { opacity: 0; transform: scale(0.97); }
+.copy.busy { opacity: 0; transform: translateY(8px); }
+.stage[data-state="checking"] .copy.busy { opacity: 1; transform: none; }
+.copy.busy .title { font-size: clamp(20px, 3vw, 26px); font-weight: 400; }
+.status { display: inline-flex; align-items: center; gap: 12px; }
+.status i { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(143, 168, 255, 0.25); border-top-color: var(--horizon); animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.chip {
+  position: absolute; left: 20px; right: 20px; bottom: 16px;
+  display: flex; justify-content: space-between; gap: 16px;
+  font-family: var(--mono); font-size: 12px; color: var(--muted);
+  opacity: 0; transform: translateY(6px);
+  transition: opacity 0.7s var(--ease) 0.2s, transform 0.7s var(--ease) 0.2s;
+  pointer-events: none;
+}
+.chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage[data-state="done"] .chip { opacity: 1; transform: none; }
+
+/* samples */
+.samples { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 18px; color: var(--muted); font-size: 14px; }
+.btn {
+  appearance: none; font: inherit; color: var(--text); cursor: pointer;
+  padding: 11px 18px; border-radius: 999px;
+  border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05);
+  transition: transform 0.4s var(--ease), background 0.4s var(--ease), border-color 0.4s var(--ease);
+}
+.btn:hover { transform: translateY(-1px); background: rgba(255, 255, 255, 0.09); border-color: rgba(190, 200, 255, 0.3); }
+.btn:active { transform: scale(0.97); }
+.btn:focus-visible, a:focus-visible { outline: 2px solid var(--horizon); outline-offset: 3px; }
+.btn.solid { background: var(--text); color: var(--night); border-color: transparent; font-weight: 500; }
+.btn.solid:hover { background: #fff; }
+
+/* result */
+.panel { display: grid; grid-template-rows: 0fr; margin-top: 0; transition: grid-template-rows 0.9s var(--ease), margin-top 0.9s var(--ease); }
+.panel[data-open="true"] { grid-template-rows: 1fr; margin-top: 28px; }
+.panel > div { overflow: hidden; min-height: 0; }
+.panel-inner { padding: 4px 2px 8px; opacity: 0; transform: translateY(10px); transition: opacity 0.8s var(--ease) 0.15s, transform 0.8s var(--ease) 0.15s; }
+.panel[data-open="true"] .panel-inner { opacity: 1; transform: none; }
+.verdict { display: flex; align-items: center; gap: 14px; }
+.verdict svg { width: 34px; height: 34px; flex: none; }
+.verdict svg circle { fill: none; stroke: var(--tone); stroke-width: 1.6; opacity: 0.5; }
+.verdict svg path { fill: none; stroke: var(--tone); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.verdict h2 { font-weight: 500; font-size: clamp(26px, 4.4vw, 38px); letter-spacing: -0.03em; color: var(--tone); }
+.explain { margin-top: 12px; max-width: 54ch; color: var(--muted); line-height: 1.55; }
+dl { margin-top: 22px; border-top: 1px solid var(--line); }
+dl > div { display: grid; grid-template-columns: 130px 1fr; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); align-items: baseline; }
+dt { color: var(--muted); font-size: 14px; }
+dd { font-family: var(--mono); font-size: 13px; line-height: 1.55; word-break: break-all; }
+dd.plain { font-family: var(--sans); font-size: 15px; word-break: normal; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; margin-top: 24px; }
+.actions a { color: var(--text); font-size: 15px; text-decoration: underline; text-decoration-color: rgba(190, 200, 255, 0.35); text-underline-offset: 5px; transition: text-decoration-color 0.3s var(--ease); }
+.actions a:hover { text-decoration-color: var(--text); }
+
+.note { margin-top: 56px; max-width: 58ch; font-size: 13px; line-height: 1.6; color: #6d759e; }
+
+.stage[data-verdict="ok"] { --tone: var(--ok); }
+.stage[data-verdict="bad"] { --tone: var(--bad); }
+.panel[data-verdict="ok"] { --tone: var(--ok); }
+.panel[data-verdict="bad"] { --tone: var(--bad); }
+
+@media (max-width: 560px) {
+  .intro { padding-top: 48px; }
+  .stage { min-height: 260px; border-radius: 24px; }
+  dl > div { grid-template-columns: 1fr; gap: 4px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 26 26" fill="none" aria-hidden="true"><path d="M3 20 C 8 4, 15 4, 23 14" stroke="#8fa8ff" stroke-width="2" stroke-linecap="round"/><circle cx="23" cy="14" r="2.6" fill="#7ce3c4"/></svg>
+      FlightProof
+    </div>
+    <div class="net" id="net" data-up="false"><span class="live"></span><span>Base Sepolia</span><span class="block" id="block"></span></div>
+  </header>
+
+  <main>
+    <section class="intro">
+      <h1>Was this flight log changed?</h1>
+      <p class="lede">Drop a log to compare its fingerprint with the record on Base Sepolia.</p>
+    </section>
+
+    <label class="stage" id="stage" data-state="idle" data-over="false">
+      <input type="file" id="file">
+      <svg class="art" viewBox="0 0 800 300" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+        <defs>
+          <mask id="reveal" maskUnits="userSpaceOnUse" x="0" y="0" width="800" height="300"><rect id="revealRect" x="0" y="0" width="0" height="300" fill="#fff"/></mask>
+        </defs>
+        <path id="guide" class="guide" d="M40 236 C 180 60, 330 40, 420 150 S 640 250, 760 90"/>
+        <g mask="url(#reveal)"><path id="trace" class="trace" d=""/></g>
+        <g id="endPos"><g id="endMark" class="endmark"></g><circle class="pulse" r="14" cx="0" cy="0"/></g>
+        <g id="pen" class="pen"><circle class="halo" r="12"/><circle class="core" r="3.6"/></g>
+      </svg>
+      <div class="copy idle">
+        <div class="title">Drop a flight log</div>
+        <div class="hint">or <u>choose a file</u></div>
+      </div>
+      <div class="copy busy" aria-live="polite">
+        <div class="status"><i></i><span class="title" id="status">Reading file</span></div>
+      </div>
+      <div class="chip"><span class="name" id="chipName"></span><span id="chipSize"></span></div>
+    </label>
+
+    <div class="samples">
+      <span>No file handy?</span>
+      <button class="btn" type="button" id="sampleOk">Try the original log</button>
+      <button class="btn" type="button" id="sampleBad">Try an edited copy</button>
+    </div>
+
+    <section class="panel" id="panel" data-open="false" data-verdict="ok" aria-live="polite">
+      <div><div class="panel-inner" id="panelInner"></div></div>
+    </section>
+
+    <p class="note">This runs on a test network with no real money. A match shows the file hasn't changed since it was registered. It can't show the file was accurate when it was recorded.</p>
+  </main>
+</div>
+
+<script>/**
+ * [js-sha3]{@link https://github.com/emn178/js-sha3}
+ *
+ * @version 0.9.3
+ * @author Chen, Yi-Cyuan [emn178@gmail.com]
+ * @copyright Chen, Yi-Cyuan 2015-2023
+ * @license MIT
+ */
+!function(){"use strict";function t(t,e,r){this.blocks=[],this.s=[],this.padding=e,this.outputBits=r,this.reset=!0,this.finalized=!1,this.block=0,this.start=0,this.blockCount=1600-(t<<1)>>5,this.byteCount=this.blockCount<<2,this.outputBlocks=r>>5,this.extraBytes=(31&r)>>3;for(var n=0;n<50;++n)this.s[n]=0}function e(e,r,n){t.call(this,e,r,n)}var r="input is invalid type",n="object"==typeof window,i=n?window:{};i.JS_SHA3_NO_WINDOW&&(n=!1);var o=!n&&"object"==typeof self;!i.JS_SHA3_NO_NODE_JS&&"object"==typeof process&&process.versions&&process.versions.node?i=global:o&&(i=self);for(var a=!i.JS_SHA3_NO_COMMON_JS&&"object"==typeof module&&module.exports,s="function"==typeof define&&define.amd,u=!i.JS_SHA3_NO_ARRAY_BUFFER&&"undefined"!=typeof ArrayBuffer,f="0123456789abcdef".split(""),c=[4,1024,262144,67108864],h=[0,8,16,24],p=[1,0,32898,0,32906,2147483648,2147516416,2147483648,32907,0,2147483649,0,2147516545,2147483648,32777,2147483648,138,0,136,0,2147516425,0,2147483658,0,2147516555,0,139,2147483648,32905,2147483648,32771,2147483648,32770,2147483648,128,2147483648,32778,0,2147483658,2147483648,2147516545,2147483648,32896,2147483648,2147483649,0,2147516424,2147483648],d=[224,256,384,512],l=[128,256],y=["hex","buffer","arrayBuffer","array","digest"],b={128:168,256:136},v=i.JS_SHA3_NO_NODE_JS||!Array.isArray?function(t){return"[object Array]"===Object.prototype.toString.call(t)}:Array.isArray,A=!u||!i.JS_SHA3_NO_ARRAY_BUFFER_IS_VIEW&&ArrayBuffer.isView?ArrayBuffer.isView:function(t){return"object"==typeof t&&t.buffer&&t.buffer.constructor===ArrayBuffer},g=function(t){var e=typeof t;if("string"===e)return[t,!0];if("object"!==e||null===t)throw new Error(r);if(u&&t.constructor===ArrayBuffer)return[new Uint8Array(t),!1];if(!v(t)&&!A(t))throw new Error(r);return[t,!1]},B=function(t){return 0===g(t)[0].length},_=function(t){for(var e=[],r=0;r<t.length;++r)e[r]=t[r];return e},k=function(e,r,n){return function(i){return new t(e,r,e).update(i)[n]()}},w=function(e,r,n){return function(i,o){return new t(e,r,o).update(i)[n]()}},S=function(t,e,r){return function(e,n,i,o){return z["cshake"+t].update(e,n,i,o)[r]()}},C=function(t,e,r){return function(e,n,i,o){return z["kmac"+t].update(e,n,i,o)[r]()}},x=function(t,e,r,n){for(var i=0;i<y.length;++i){var o=y[i];t[o]=e(r,n,o)}return t},m=function(e,r){var n=k(e,r,"hex");return n.create=function(){return new t(e,r,e)},n.update=function(t){return n.create().update(t)},x(n,k,e,r)},O=[{name:"keccak",padding:[1,256,65536,16777216],bits:d,createMethod:m},{name:"sha3",padding:[6,1536,393216,100663296],bits:d,createMethod:m},{name:"shake",padding:[31,7936,2031616,520093696],bits:l,createMethod:function(e,r){var n=w(e,r,"hex");return n.create=function(n){return new t(e,r,n)},n.update=function(t,e){return n.create(e).update(t)},x(n,w,e,r)}},{name:"cshake",padding:c,bits:l,createMethod:function(e,r){var n=b[e],i=S(e,0,"hex");return i.create=function(i,o,a){return B(o)&&B(a)?z["shake"+e].create(i):new t(e,r,i).bytepad([o,a],n)},i.update=function(t,e,r,n){return i.create(e,r,n).update(t)},x(i,S,e,r)}},{name:"kmac",padding:c,bits:l,createMethod:function(t,r){var n=b[t],i=C(t,0,"hex");return i.create=function(i,o,a){return new e(t,r,o).bytepad(["KMAC",a],n).bytepad([i],n)},i.update=function(t,e,r,n){return i.create(t,r,n).update(e)},x(i,C,t,r)}}],z={},N=[],J=0;J<O.length;++J)for(var M=O[J],j=M.bits,E=0;E<j.length;++E){var H=M.name+"_"+j[E];if(N.push(H),z[H]=M.createMethod(j[E],M.padding),"sha3"!==M.name){var I=M.name+j[E];N.push(I),z[I]=z[H]}}t.prototype.update=function(t){if(this.finalized)throw new Error("finalize already called");var e=g(t);t=e[0];for(var r,n,i=e[1],o=this.blocks,a=this.byteCount,s=t.length,u=this.blockCount,f=0,c=this.s;f<s;){if(this.reset)for(this.reset=!1,o[0]=this.block,r=1;r<u+1;++r)o[r]=0;if(i)for(r=this.start;f<s&&r<a;++f)(n=t.charCodeAt(f))<128?o[r>>2]|=n<<h[3&r++]:n<2048?(o[r>>2]|=(192|n>>6)<<h[3&r++],o[r>>2]|=(128|63&n)<<h[3&r++]):n<55296||n>=57344?(o[r>>2]|=(224|n>>12)<<h[3&r++],o[r>>2]|=(128|n>>6&63)<<h[3&r++],o[r>>2]|=(128|63&n)<<h[3&r++]):(n=65536+((1023&n)<<10|1023&t.charCodeAt(++f)),o[r>>2]|=(240|n>>18)<<h[3&r++],o[r>>2]|=(128|n>>12&63)<<h[3&r++],o[r>>2]|=(128|n>>6&63)<<h[3&r++],o[r>>2]|=(128|63&n)<<h[3&r++]);else for(r=this.start;f<s&&r<a;++f)o[r>>2]|=t[f]<<h[3&r++];if(this.lastByteIndex=r,r>=a){for(this.start=r-a,this.block=o[u],r=0;r<u;++r)c[r]^=o[r];R(c),this.reset=!0}else this.start=r}return this},t.prototype.encode=function(t,e){var r=255&t,n=1,i=[r];for(r=255&(t>>=8);r>0;)i.unshift(r),r=255&(t>>=8),++n;return e?i.push(n):i.unshift(n),this.update(i),i.length},t.prototype.encodeString=function(t){var e=g(t);t=e[0];var r=e[1],n=0,i=t.length;if(r)for(var o=0;o<t.length;++o){var a=t.charCodeAt(o);a<128?n+=1:a<2048?n+=2:a<55296||a>=57344?n+=3:(a=65536+((1023&a)<<10|1023&t.charCodeAt(++o)),n+=4)}else n=i;return n+=this.encode(8*n),this.update(t),n},t.prototype.bytepad=function(t,e){for(var r=this.encode(e),n=0;n<t.length;++n)r+=this.encodeString(t[n]);var i=(e-r%e)%e,o=[];return o.length=i,this.update(o),this},t.prototype.finalize=function(){if(!this.finalized){this.finalized=!0;var t=this.blocks,e=this.lastByteIndex,r=this.blockCount,n=this.s;if(t[e>>2]|=this.padding[3&e],this.lastByteIndex===this.byteCount)for(t[0]=t[r],e=1;e<r+1;++e)t[e]=0;for(t[r-1]|=2147483648,e=0;e<r;++e)n[e]^=t[e];R(n)}},t.prototype.toString=t.prototype.hex=function(){this.finalize();for(var t,e=this.blockCount,r=this.s,n=this.outputBlocks,i=this.extraBytes,o=0,a=0,s="";a<n;){for(o=0;o<e&&a<n;++o,++a)t=r[o],s+=f[t>>4&15]+f[15&t]+f[t>>12&15]+f[t>>8&15]+f[t>>20&15]+f[t>>16&15]+f[t>>28&15]+f[t>>24&15];a%e==0&&(r=_(r),R(r),o=0)}return i&&(t=r[o],s+=f[t>>4&15]+f[15&t],i>1&&(s+=f[t>>12&15]+f[t>>8&15]),i>2&&(s+=f[t>>20&15]+f[t>>16&15])),s},t.prototype.arrayBuffer=function(){this.finalize();var t,e=this.blockCount,r=this.s,n=this.outputBlocks,i=this.extraBytes,o=0,a=0,s=this.outputBits>>3;t=i?new ArrayBuffer(n+1<<2):new ArrayBuffer(s);for(var u=new Uint32Array(t);a<n;){for(o=0;o<e&&a<n;++o,++a)u[a]=r[o];a%e==0&&(r=_(r),R(r))}return i&&(u[a]=r[o],t=t.slice(0,s)),t},t.prototype.buffer=t.prototype.arrayBuffer,t.prototype.digest=t.prototype.array=function(){this.finalize();for(var t,e,r=this.blockCount,n=this.s,i=this.outputBlocks,o=this.extraBytes,a=0,s=0,u=[];s<i;){for(a=0;a<r&&s<i;++a,++s)t=s<<2,e=n[a],u[t]=255&e,u[t+1]=e>>8&255,u[t+2]=e>>16&255,u[t+3]=e>>24&255;s%r==0&&(n=_(n),R(n))}return o&&(t=s<<2,e=n[a],u[t]=255&e,o>1&&(u[t+1]=e>>8&255),o>2&&(u[t+2]=e>>16&255)),u},(e.prototype=new t).finalize=function(){return this.encode(this.outputBits,!0),t.prototype.finalize.call(this)};var R=function(t){var e,r,n,i,o,a,s,u,f,c,h,d,l,y,b,v,A,g,B,_,k,w,S,C,x,m,O,z,N,J,M,j,E,H,I,R,F,U,D,V,W,Y,K,q,G,L,P,Q,T,X,Z,$,tt,et,rt,nt,it,ot,at,st,ut,ft,ct;for(n=0;n<48;n+=2)i=t[0]^t[10]^t[20]^t[30]^t[40],o=t[1]^t[11]^t[21]^t[31]^t[41],a=t[2]^t[12]^t[22]^t[32]^t[42],s=t[3]^t[13]^t[23]^t[33]^t[43],u=t[4]^t[14]^t[24]^t[34]^t[44],f=t[5]^t[15]^t[25]^t[35]^t[45],c=t[6]^t[16]^t[26]^t[36]^t[46],h=t[7]^t[17]^t[27]^t[37]^t[47],e=(d=t[8]^t[18]^t[28]^t[38]^t[48])^(a<<1|s>>>31),r=(l=t[9]^t[19]^t[29]^t[39]^t[49])^(s<<1|a>>>31),t[0]^=e,t[1]^=r,t[10]^=e,t[11]^=r,t[20]^=e,t[21]^=r,t[30]^=e,t[31]^=r,t[40]^=e,t[41]^=r,e=i^(u<<1|f>>>31),r=o^(f<<1|u>>>31),t[2]^=e,t[3]^=r,t[12]^=e,t[13]^=r,t[22]^=e,t[23]^=r,t[32]^=e,t[33]^=r,t[42]^=e,t[43]^=r,e=a^(c<<1|h>>>31),r=s^(h<<1|c>>>31),t[4]^=e,t[5]^=r,t[14]^=e,t[15]^=r,t[24]^=e,t[25]^=r,t[34]^=e,t[35]^=r,t[44]^=e,t[45]^=r,e=u^(d<<1|l>>>31),r=f^(l<<1|d>>>31),t[6]^=e,t[7]^=r,t[16]^=e,t[17]^=r,t[26]^=e,t[27]^=r,t[36]^=e,t[37]^=r,t[46]^=e,t[47]^=r,e=c^(i<<1|o>>>31),r=h^(o<<1|i>>>31),t[8]^=e,t[9]^=r,t[18]^=e,t[19]^=r,t[28]^=e,t[29]^=r,t[38]^=e,t[39]^=r,t[48]^=e,t[49]^=r,y=t[0],b=t[1],L=t[11]<<4|t[10]>>>28,P=t[10]<<4|t[11]>>>28,z=t[20]<<3|t[21]>>>29,N=t[21]<<3|t[20]>>>29,st=t[31]<<9|t[30]>>>23,ut=t[30]<<9|t[31]>>>23,Y=t[40]<<18|t[41]>>>14,K=t[41]<<18|t[40]>>>14,H=t[2]<<1|t[3]>>>31,I=t[3]<<1|t[2]>>>31,v=t[13]<<12|t[12]>>>20,A=t[12]<<12|t[13]>>>20,Q=t[22]<<10|t[23]>>>22,T=t[23]<<10|t[22]>>>22,J=t[33]<<13|t[32]>>>19,M=t[32]<<13|t[33]>>>19,ft=t[42]<<2|t[43]>>>30,ct=t[43]<<2|t[42]>>>30,et=t[5]<<30|t[4]>>>2,rt=t[4]<<30|t[5]>>>2,R=t[14]<<6|t[15]>>>26,F=t[15]<<6|t[14]>>>26,g=t[25]<<11|t[24]>>>21,B=t[24]<<11|t[25]>>>21,X=t[34]<<15|t[35]>>>17,Z=t[35]<<15|t[34]>>>17,j=t[45]<<29|t[44]>>>3,E=t[44]<<29|t[45]>>>3,C=t[6]<<28|t[7]>>>4,x=t[7]<<28|t[6]>>>4,nt=t[17]<<23|t[16]>>>9,it=t[16]<<23|t[17]>>>9,U=t[26]<<25|t[27]>>>7,D=t[27]<<25|t[26]>>>7,_=t[36]<<21|t[37]>>>11,k=t[37]<<21|t[36]>>>11,$=t[47]<<24|t[46]>>>8,tt=t[46]<<24|t[47]>>>8,q=t[8]<<27|t[9]>>>5,G=t[9]<<27|t[8]>>>5,m=t[18]<<20|t[19]>>>12,O=t[19]<<20|t[18]>>>12,ot=t[29]<<7|t[28]>>>25,at=t[28]<<7|t[29]>>>25,V=t[38]<<8|t[39]>>>24,W=t[39]<<8|t[38]>>>24,w=t[48]<<14|t[49]>>>18,S=t[49]<<14|t[48]>>>18,t[0]=y^~v&g,t[1]=b^~A&B,t[10]=C^~m&z,t[11]=x^~O&N,t[20]=H^~R&U,t[21]=I^~F&D,t[30]=q^~L&Q,t[31]=G^~P&T,t[40]=et^~nt&ot,t[41]=rt^~it&at,t[2]=v^~g&_,t[3]=A^~B&k,t[12]=m^~z&J,t[13]=O^~N&M,t[22]=R^~U&V,t[23]=F^~D&W,t[32]=L^~Q&X,t[33]=P^~T&Z,t[42]=nt^~ot&st,t[43]=it^~at&ut,t[4]=g^~_&w,t[5]=B^~k&S,t[14]=z^~J&j,t[15]=N^~M&E,t[24]=U^~V&Y,t[25]=D^~W&K,t[34]=Q^~X&$,t[35]=T^~Z&tt,t[44]=ot^~st&ft,t[45]=at^~ut&ct,t[6]=_^~w&y,t[7]=k^~S&b,t[16]=J^~j&C,t[17]=M^~E&x,t[26]=V^~Y&H,t[27]=W^~K&I,t[36]=X^~$&q,t[37]=Z^~tt&G,t[46]=st^~ft&et,t[47]=ut^~ct&rt,t[8]=w^~y&v,t[9]=S^~b&A,t[18]=j^~C&m,t[19]=E^~x&O,t[28]=Y^~H&R,t[29]=K^~I&F,t[38]=$^~q&L,t[39]=tt^~G&P,t[48]=ft^~et&nt,t[49]=ct^~rt&it,t[0]^=p[n],t[1]^=p[n+1]};if(a)module.exports=z;else{for(J=0;J<N.length;++J)i[N[J]]=z[N[J]];s&&define(function(){return z})}}();</script>
+<script>
+(() => {
+  const CONTRACT = "0x1C8E7473272b7879d6e20494c8a04D3eB46de00e";
+  const RPC = "https://sepolia.base.org";
+  const EXPLORER = "https://sepolia.basescan.org/address/" + CONTRACT;
+  const SAMPLES = {"original": "time_s,lat,lon,alt_m,speed_ms\n0,12.9716,77.5946,0,0\n10,12.9718,77.5948,35,4.2\n20,12.9722,77.5952,82,5.1\n30,12.9727,77.5957,120,5.8\n40,12.9731,77.5961,118,5.5\n50,12.9735,77.5964,60,4.9\n60,12.9736,77.5965,0,0\n", "edited": "time_s,lat,lon,alt_m,speed_ms\n0,12.9716,77.5946,0,0\n10,12.9718,77.5948,35,4.2\n20,12.9722,77.5952,82,5.1\n30,12.9727,77.5957,121,5.8\n40,12.9731,77.5961,118,5.5\n50,12.9735,77.5964,60,4.9\n60,12.9736,77.5965,0,0\n"};
+
+  const $ = (s) => document.querySelector(s);
+  const stage = $("#stage"), fileInput = $("#file"), panel = $("#panel"), panelInner = $("#panelInner");
+  const trace = $("#trace"), guide = $("#guide"), pen = $("#pen"), revealRect = $("#revealRect");
+  const endMark = $("#endMark"), endPos = $("#endPos"), statusEl = $("#status");
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+  const keccak = window.keccak256;
+
+  let busy = false;
+  let idleLoop = true;
+
+  /* ---------- network ---------- */
+  async function rpc(method, params) {
+    const res = await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const j = await res.json();
+    if (j.error) throw new Error(j.error.message);
+    return j.result;
+  }
+
+  const SELECTOR = keccak("records(bytes32)").slice(0, 8);
+
+  function checksum(addr) {
+    const a = addr.toLowerCase().replace("0x", "");
+    const h = keccak(a);
+    let out = "0x";
+    for (let i = 0; i < 40; i++) out += parseInt(h[i], 16) >= 8 ? a[i].toUpperCase() : a[i];
+    return out;
+  }
+
+  async function lookup(hash) {
+    const out = await rpc("eth_call", [{ to: CONTRACT, data: "0x" + SELECTOR + hash }, "latest"]);
+    const body = out.slice(2);
+    return { signer: checksum("0x" + body.slice(24, 64)), time: Number(BigInt("0x" + body.slice(64, 128))) };
+  }
+
+  async function pollBlock() {
+    const net = $("#net");
+    try {
+      const n = parseInt(await rpc("eth_blockNumber", []), 16);
+      $("#block").textContent = "#" + n.toLocaleString();
+      net.dataset.up = "true";
+    } catch {
+      $("#block").textContent = "offline";
+      net.dataset.up = "false";
+    }
+  }
+  pollBlock();
+  setInterval(pollBlock, 15000);
+
+  /* ---------- fingerprint line ---------- */
+  function tracePath(hash) {
+    const b = hash.match(/../g).map((x) => parseInt(x, 16));
+    const pts = [];
+    for (let i = 0; i < 16; i++) pts.push([40 + i * 48, 236 - (((b[i] + b[i + 16]) % 256) / 255) * 160]);
+    let d = `M${pts[0][0]} ${pts[0][1].toFixed(1)}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+      const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+      const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+      d += ` C${c1[0].toFixed(1)} ${c1[1].toFixed(1)} ${c2[0].toFixed(1)} ${c2[1].toFixed(1)} ${p2[0]} ${p2[1].toFixed(1)}`;
+    }
+    return d;
+  }
+
+  function placePen(path, len, p) {
+    const pt = path.getPointAtLength(len * p);
+    pen.setAttribute("transform", `translate(${pt.x.toFixed(1)} ${pt.y.toFixed(1)})`);
+    return pt;
+  }
+
+  // idle: a small dot flies along the guide
+  const guideLen = guide.getTotalLength();
+  function idleFrame(now) {
+    if (!idleLoop) return;
+    placePen(guide, guideLen, (now / 9000) % 1);
+    requestAnimationFrame(idleFrame);
+  }
+  if (reduce) placePen(guide, guideLen, 0.5); else requestAnimationFrame(idleFrame);
+
+  function drawTrace(d, ms) {
+    trace.setAttribute("d", d);
+    const len = trace.getTotalLength();
+    return new Promise((resolve) => {
+      const t0 = performance.now();
+      (function frame(now) {
+        const p = reduce ? 1 : Math.min(1, (now - t0) / ms);
+        const pt = placePen(trace, len, ease(p));
+        revealRect.setAttribute("width", p === 1 ? 800 : pt.x + 2);
+        if (p < 1) requestAnimationFrame(frame); else resolve(trace.getPointAtLength(len));
+      })(t0);
+    });
+  }
+
+  function dropMark(verdict, pt) {
+    const glyph = verdict === "ok" ? "M-5 0.5 L-1.5 4 L5.5 -4" : "M-4.5 -4.5 L4.5 4.5 M4.5 -4.5 L-4.5 4.5";
+    endPos.setAttribute("transform", `translate(${pt.x.toFixed(1)} ${pt.y.toFixed(1)})`);
+    endMark.innerHTML = `<circle class="ring" r="14"/><path class="glyph" d="${glyph}"/>`;
+    pen.style.opacity = 0;
+    requestAnimationFrame(() => endMark.classList.add("in"));
+  }
+
+  /* ---------- text effects ---------- */
+  function scramble(el, final, ms = 1000) {
+    if (reduce) { el.textContent = final; return; }
+    const hex = "0123456789abcdef";
+    const t0 = performance.now();
+    (function frame(now) {
+      const p = Math.min(1, (now - t0) / ms);
+      const lock = Math.floor(p * final.length);
+      let s = final.slice(0, lock);
+      for (let i = lock; i < final.length; i++) s += i < 2 ? final[i] : hex[(Math.random() * 16) | 0];
+      el.textContent = s;
+      if (p < 1) requestAnimationFrame(frame);
+    })(t0);
+  }
+
+  const fmtSize = (n) => (n < 1024 ? n + " bytes" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB");
+  const fmtTime = (s) => new Date(s * 1000).toLocaleString(undefined, { dateStyle: "long", timeStyle: "long" });
+
+  const ICON_OK = '<svg viewBox="0 0 34 34" aria-hidden="true"><circle cx="17" cy="17" r="15.5"/><path d="M10.5 17.5 L15 22 L23.5 12"/></svg>';
+  const ICON_BAD = '<svg viewBox="0 0 34 34" aria-hidden="true"><circle cx="17" cy="17" r="15.5"/><path d="M11.5 11.5 L22.5 22.5 M22.5 11.5 L11.5 22.5"/></svg>';
+
+  /* ---------- flow ---------- */
+  function resetVisuals() {
+    panel.dataset.open = "false";
+    stage.dataset.verdict = "";
+    endMark.classList.remove("in");
+    endMark.innerHTML = "";
+    endPos.removeAttribute("transform");
+    trace.setAttribute("d", "");
+    revealRect.setAttribute("width", 0);
+    pen.style.opacity = 1;
+    $("#chipName").textContent = "";
+    $("#chipSize").textContent = "";
+  }
+
+  function toIdle() {
+    resetVisuals();
+    stage.dataset.state = "idle";
+    if (!reduce && !idleLoop) { idleLoop = true; requestAnimationFrame(idleFrame); }
+  }
+
+  function showPanel(verdict, hash, rec, file) {
+    panel.dataset.verdict = verdict;
+    const ok = verdict === "ok";
+    panelInner.innerHTML = `
+      <div class="verdict">${ok ? ICON_OK : ICON_BAD}<h2>${ok ? "Matches the record" : "Not in the record"}</h2></div>
+      <p class="explain">${ok
+        ? "This file is exactly what was registered. Not a single value has changed since."
+        : "This fingerprint was never registered. Either this file was never recorded, or it was edited after it was."}</p>
+      <dl>
+        <div><dt>Fingerprint</dt><dd id="fp">0x${hash}</dd></div>
+        ${ok ? `<div><dt>Signed by</dt><dd>${rec.signer}</dd></div><div><dt>Registered</dt><dd class="plain">${fmtTime(rec.time)}</dd></div>` : ""}
+      </dl>
+      <div class="actions">
+        <button class="btn solid" type="button" id="again">Check another log</button>
+        <a href="${EXPLORER}" target="_blank" rel="noopener">View contract on Basescan</a>
+      </div>`;
+    $("#again").addEventListener("click", () => { toIdle(); fileInput.value = ""; fileInput.click(); });
+    panel.dataset.open = "true";
+    scramble($("#fp"), "0x" + hash, 1100);
+    if (!reduce) setTimeout(() => panel.scrollIntoView({ behavior: "smooth", block: "nearest" }), 500);
+  }
+
+  function showError(message) {
+    panel.dataset.verdict = "bad";
+    panelInner.innerHTML = `
+      <div class="verdict">${ICON_BAD}<h2>Couldn't check this log</h2></div>
+      <p class="explain">${message}</p>
+      <div class="actions"><button class="btn solid" type="button" id="again">Try again</button></div>`;
+    $("#again").addEventListener("click", () => { toIdle(); });
+    panel.dataset.open = "true";
+  }
+
+  async function check(file) {
+    if (busy || !file) return;
+    busy = true;
+    idleLoop = false;
+    resetVisuals();
+    stage.dataset.state = "checking";
+    try {
+      statusEl.textContent = "Reading file";
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      await sleep(500);
+      statusEl.textContent = "Computing fingerprint";
+      const hash = keccak(bytes);
+      await sleep(700);
+      statusEl.textContent = "Asking the contract";
+      const [rec] = await Promise.all([lookup(hash), sleep(700)]);
+
+      const verdict = rec.time > 0 ? "ok" : "bad";
+      stage.dataset.verdict = verdict;
+      $("#chipName").textContent = file.name;
+      $("#chipSize").textContent = fmtSize(file.size);
+      stage.dataset.state = "done";
+      pen.style.opacity = 1;
+      setTimeout(() => showPanel(verdict, hash, rec, file), reduce ? 0 : 900);
+      const end = await drawTrace(tracePath(hash), 1700);
+      dropMark(verdict, end);
+    } catch (err) {
+      toIdle();
+      showError(err && /HTTP|fetch|network|Failed/i.test(String(err)) ? "Couldn't reach Base Sepolia. Check your connection and try again." : "Something went wrong while reading the log. Try again.");
+    } finally {
+      busy = false;
+    }
+  }
+
+  /* ---------- input ---------- */
+  fileInput.addEventListener("change", () => check(fileInput.files[0]));
+  ["dragenter", "dragover"].forEach((t) => stage.addEventListener(t, (e) => { e.preventDefault(); stage.dataset.over = "true"; }));
+  ["dragleave", "drop"].forEach((t) => stage.addEventListener(t, (e) => { e.preventDefault(); stage.dataset.over = "false"; }));
+  stage.addEventListener("drop", (e) => check(e.dataTransfer.files[0]));
+  ["dragover", "drop"].forEach((t) => window.addEventListener(t, (e) => e.preventDefault()));
+  stage.addEventListener("click", (e) => { if (busy) e.preventDefault(); });
+  stage.addEventListener("pointermove", (e) => {
+    const r = stage.getBoundingClientRect();
+    stage.style.setProperty("--mx", ((e.clientX - r.left) / r.width) * 100 + "%");
+    stage.style.setProperty("--my", ((e.clientY - r.top) / r.height) * 100 + "%");
+  });
+
+  $("#sampleOk").addEventListener("click", () => check(new File([SAMPLES.original], "flight_001.csv", { type: "text/csv" })));
+  $("#sampleBad").addEventListener("click", () => check(new File([SAMPLES.edited], "flight_001_edited.csv", { type: "text/csv" })));
+})();
+</script>
+</body>
+</html>
